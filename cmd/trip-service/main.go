@@ -3,65 +3,85 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/joho/godotenv"
 
 	"github.com/chugun223/TripGo/internal/config"
-	"github.com/chugun223/TripGo/internal/database"
-	api "github.com/chugun223/TripGo/internal/generated"
-	"github.com/chugun223/TripGo/internal/httpapi"
-	"github.com/chugun223/TripGo/internal/repository"
-	"github.com/chugun223/TripGo/internal/service"
+	"github.com/chugun223/TripGo/internal/container"
+	"github.com/chugun223/TripGo/internal/infra/logger"
+	"github.com/chugun223/TripGo/internal/infra/telemetry"
 )
 
+const telemetryShutdownTimeout = 5 * time.Second
+
 func main() {
+	if err := run(); err != nil {
+		slog.Error("application failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	_ = godotenv.Load()
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("configuration loading failed: %v", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	dbPool, err := database.NewPool(context.Background(), cfg.Database)
+	log := logger.New(cfg.Log.Level)
+	slog.SetDefault(log)
+
+	shutdownTracing, err := telemetry.InitTracing(
+		context.Background(),
+	)
 	if err != nil {
-		log.Fatalf("database initialization failed: %v", err)
+		return fmt.Errorf("initialize tracing: %w", err)
 	}
-	defer dbPool.Close()
 
-	log.Println("database connection established")
-
-	tripRepository := repository.NewTripRepository(dbPool)
-	historyRepository := repository.NewTripStatusHistoryRepository(dbPool)
-	txManager := database.NewTxManager(dbPool)
-
-	tripService := service.NewTripService(
-		tripRepository,
-		historyRepository,
-		txManager,
+	shutdownMetrics, err := telemetry.InitMetrics(
+		context.Background(),
 	)
-
-	apiHandler := httpapi.NewHandler(
-		tripService,
-		dbPool,
-		cfg.Database.QueryTimeout,
-	)
-
-	router := chi.NewRouter()
-	handler := api.HandlerFromMux(apiHandler, router)
-
-	server := &http.Server{
-		Addr:              cfg.HTTP.Addr,
-		Handler:           handler,
-		ReadTimeout:       cfg.HTTP.ReadTimeout,
-		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
-		WriteTimeout:      cfg.HTTP.WriteTimeout,
-		IdleTimeout:       cfg.HTTP.IdleTimeout,
+	if err != nil {
+		return fmt.Errorf("initialize metrics: %w", err)
 	}
+
+	defer func() {
+		metricsCtx, cancel := context.WithTimeout(
+			context.Background(),
+			telemetryShutdownTimeout,
+		)
+		defer cancel()
+
+		if err := shutdownMetrics(metricsCtx); err != nil {
+			log.Error(
+				"metrics shutdown failed",
+				"error", err,
+			)
+		}
+	}()
+
+	defer func() {
+		telemetryCtx, cancel := context.WithTimeout(
+			context.Background(),
+			telemetryShutdownTimeout,
+		)
+		defer cancel()
+
+		if err := shutdownTracing(telemetryCtx); err != nil {
+			log.Error(
+				"telemetry shutdown failed",
+				"error", err,
+			)
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
@@ -70,12 +90,23 @@ func main() {
 	)
 	defer stop()
 
-	log.Printf("starting server on %s", cfg.HTTP.Addr)
+	app, err := container.New(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("initialize application: %w", err)
+	}
+	defer app.Close()
+
+	log.Info(
+		"starting HTTP server",
+		"address", cfg.HTTP.Addr,
+	)
+
+	serverErrors := make(chan error, 1)
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil &&
-			!errors.Is(err, http.ErrServerClosed) {
-			log.Printf("HTTP server failed: %v", err)
+		err := app.Server.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- err
 			stop()
 		}
 	}()
@@ -88,7 +119,21 @@ func main() {
 	)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v", err)
+	if err := app.Server.Shutdown(shutdownCtx); err != nil {
+		log.Error(
+			"server shutdown error",
+			"error", err,
+		)
+
+		return fmt.Errorf("shutdown HTTP server: %w", err)
+	}
+
+	log.Info("HTTP server stopped")
+
+	select {
+	case err := <-serverErrors:
+		return fmt.Errorf("HTTP server failed: %w", err)
+	default:
+		return nil
 	}
 }
