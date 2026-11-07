@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"math"
 	"net/http"
 	"time"
 
@@ -238,58 +237,6 @@ func contextWithTimeout(
 	timeout time.Duration,
 ) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), timeout)
-}
-
-type createTripRequest struct {
-	UserID     *openapi_types.UUID `json:"user_id"`
-	DriverID   *openapi_types.UUID `json:"driver_id"`
-	StartPoint *coordinatesRequest `json:"start_point"`
-	EndPoint   *coordinatesRequest `json:"end_point"`
-	Price      *int64              `json:"price"`
-}
-
-type coordinatesRequest struct {
-	Latitude  *float64 `json:"latitude"`
-	Longitude *float64 `json:"longitude"`
-}
-
-func validateTripData(body api.TripData) error {
-	if uuid.UUID(body.UserId) == uuid.Nil {
-		return errors.New("user_id должен быть ненулевым UUID")
-	}
-
-	if uuid.UUID(body.DriverId) == uuid.Nil {
-		return errors.New("driver_id должен быть ненулевым UUID")
-	}
-
-	if body.Price < 0 {
-		return errors.New("price не может быть отрицательным")
-	}
-
-	if !validCoordinates(body.StartPoint) {
-		return errors.New("start_point содержит некорректные координаты")
-	}
-
-	if !validCoordinates(body.EndPoint) {
-		return errors.New("end_point содержит некорректные координаты")
-	}
-
-	return nil
-}
-
-func validCoordinates(point api.Coordinates) bool {
-	if math.IsNaN(point.Latitude) || math.IsInf(point.Latitude, 0) {
-		return false
-	}
-
-	if math.IsNaN(point.Longitude) || math.IsInf(point.Longitude, 0) {
-		return false
-	}
-
-	return point.Latitude >= -90 &&
-		point.Latitude <= 90 &&
-		point.Longitude >= -180 &&
-		point.Longitude <= 180
 }
 
 func toAPITrip(trip domain.Trip) api.Trip {
