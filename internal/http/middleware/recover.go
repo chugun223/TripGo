@@ -3,11 +3,14 @@ package middleware
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/chugun223/TripGo/internal/http/domainerror"
 	"github.com/chugun223/TripGo/internal/infra/logger"
@@ -26,6 +29,16 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 
 			defer func() {
 				if recovered := recover(); recovered != nil {
+					span := trace.SpanFromContext(r.Context())
+
+					panicErr := fmt.Errorf("HTTP handler panic: %v", recovered)
+
+					span.RecordError(panicErr)
+					span.SetStatus(
+						codes.Error,
+						"HTTP handler panic",
+					)
+
 					requestLogger := logger.WithTrace(
 						r.Context(),
 						log,

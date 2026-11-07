@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 
 	api "github.com/chugun223/TripGo/internal/generated"
@@ -88,7 +87,6 @@ func (h *Handler) Handle(
 		input,
 	)
 	if err != nil {
-		log.Printf("create trip failed: %v", err)
 		response.DomainError(w, err)
 		return
 	}

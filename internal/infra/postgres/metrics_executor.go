@@ -162,27 +162,24 @@ func (e *MetricsExecutor) record(
 	}
 
 	if err != nil {
+		var errorType string
 		var pgErr *pgconn.PgError
 
 		switch {
 		case errors.As(err, &pgErr):
-			attrs = append(
-				attrs,
-				attribute.String("error.type", pgErr.Code),
-			)
+			errorType = pgErr.Code
 
 		case errors.Is(err, pgx.ErrNoRows):
-			attrs = append(
-				attrs,
-				attribute.String("error.type", "no_rows"),
-			)
+			errorType = errorTypeNoRows
 
 		default:
-			attrs = append(
-				attrs,
-				attribute.String("error.type", "other"),
-			)
+			errorType = "other"
 		}
+
+		attrs = append(
+			attrs,
+			attribute.String("error.type", errorType),
+		)
 	}
 
 	e.metrics.OperationDuration.Record(

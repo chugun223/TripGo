@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/chugun223/TripGo/internal/domain/trip"
@@ -34,11 +35,14 @@ func (o *Create) Execute(
 ) (trip.Trip, error) {
 	result, err := o.next.Execute(ctx, input)
 	if err != nil {
-		logger.WithTrace(ctx, o.log).ErrorContext(
-			ctx,
-			"failed to create trip",
-			slog.Any("error", err),
-		)
+		if !errors.Is(err, trip.ErrDriverBusy) {
+			logger.WithTrace(ctx, o.log).ErrorContext(
+				ctx,
+				"failed to create trip",
+				slog.Any("error", err),
+			)
+		}
+
 		return trip.Trip{}, err
 	}
 

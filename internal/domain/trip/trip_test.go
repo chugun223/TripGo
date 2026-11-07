@@ -1,9 +1,11 @@
 package trip
 
 import (
-	"errors"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTripFinish(t *testing.T) {
@@ -37,29 +39,22 @@ func TestTripFinish(t *testing.T) {
 
 			err := trip.Finish(finishedAt)
 
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("Finish() error = %v, want %v", err, tt.wantErr)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
 			}
 
-			if trip.Status != tt.wantStatus {
-				t.Errorf(
-					"Finish() status = %s, want %s",
-					trip.Status,
-					tt.wantStatus,
-				)
-			}
+			assert.Equal(t, tt.wantStatus, trip.Status)
 
 			if tt.wantErr == nil {
-				if trip.FinishedAt == nil {
-					t.Fatal("FinishedAt must be set")
-				}
-
-				if !trip.FinishedAt.Equal(finishedAt) {
-					t.Errorf("FinishedAt = %v, want %v",
-						*trip.FinishedAt, finishedAt)
-				}
-			} else if trip.FinishedAt != nil {
-				t.Errorf("FinishedAt must remain nil on error")
+				require.NotNil(t, trip.FinishedAt)
+				assert.True(
+					t,
+					trip.FinishedAt.Equal(finishedAt),
+				)
+			} else {
+				assert.Nil(t, trip.FinishedAt)
 			}
 		})
 	}

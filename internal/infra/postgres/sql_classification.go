@@ -4,14 +4,19 @@ import (
 	"strings"
 )
 
+const (
+	unknownCollection = "unknown"
+	errorTypeNoRows   = "no_rows"
+)
+
 func classifySQL(sql string) (operation, collection string) {
 	fields := strings.Fields(sql)
 	if len(fields) == 0 {
-		return "UNKNOWN", "unknown"
+		return "UNKNOWN", unknownCollection
 	}
 
 	operation = strings.ToUpper(fields[0])
-	collection = "unknown"
+	collection = unknownCollection
 
 	switch operation {
 	case "INSERT":

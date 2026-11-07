@@ -18,7 +18,6 @@ import (
 func TestHTTPMetrics(t *testing.T) {
 	ctx := context.Background()
 
-	// Создаём отдельный MeterProvider для теста.
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(reader),

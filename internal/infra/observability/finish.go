@@ -36,7 +36,8 @@ func (o *Finish) Execute(
 ) (trip.Trip, error) {
 	result, err := o.next.Execute(ctx, id)
 	if err != nil {
-		if !errors.Is(err, trip.ErrTripCompleted) {
+		if !errors.Is(err, trip.ErrTripCompleted) &&
+			!errors.Is(err, trip.ErrTripNotFound) {
 			logger.WithTrace(ctx, o.log).ErrorContext(
 				ctx,
 				"failed to finish trip",
@@ -44,6 +45,7 @@ func (o *Finish) Execute(
 				slog.Any("error", err),
 			)
 		}
+
 		return trip.Trip{}, err
 	}
 

@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/chugun223/TripGo/internal/config"
@@ -131,8 +133,12 @@ func New(
 
 				route := routeCtx.RoutePattern()
 				if route != "" {
-					trace.SpanFromContext(r.Context()).SetName(
-						r.Method + " " + route,
+					span := trace.SpanFromContext(r.Context())
+
+					span.SetName(r.Method + " " + route)
+
+					span.SetAttributes(
+						attribute.String("http.route", route),
 					)
 				}
 			}()
@@ -146,12 +152,15 @@ func New(
 		router,
 	)
 
-	tracedHandler := otelhttp.NewHandler(
+	recoveredHandler := middleware.Recover(log)(
 		apiHandlerWithRoutes,
-		"HTTP request",
 	)
 
-	handler := middleware.Recover(log)(tracedHandler)
+	handler := otelhttp.NewHandler(
+		recoveredHandler,
+		"HTTP request",
+		otelhttp.WithMeterProvider(noop.NewMeterProvider()),
+	)
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,

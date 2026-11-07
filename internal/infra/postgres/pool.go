@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/chugun223/TripGo/internal/config"
@@ -21,7 +20,7 @@ func NewPool(ctx context.Context, cfg config.DatabaseConfig) (*pgxpool.Pool, err
 	poolConfig.MaxConnLifetime = cfg.MaxConnLifetime
 	poolConfig.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
 
-	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
+	poolConfig.ConnConfig.Tracer = newCollectionNameTracer()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
