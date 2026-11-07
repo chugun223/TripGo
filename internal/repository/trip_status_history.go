@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,11 +13,18 @@ import (
 )
 
 type TripStatusHistoryRepository struct {
-	pool *pgxpool.Pool
+	pool         *pgxpool.Pool
+	queryTimeout time.Duration
 }
 
-func NewTripStatusHistoryRepository(pool *pgxpool.Pool) *TripStatusHistoryRepository {
-	return &TripStatusHistoryRepository{pool: pool}
+func NewTripStatusHistoryRepository(
+	pool *pgxpool.Pool,
+	queryTimeout time.Duration,
+) *TripStatusHistoryRepository {
+	return &TripStatusHistoryRepository{
+		pool:         pool,
+		queryTimeout: queryTimeout,
+	}
 }
 
 func (r *TripStatusHistoryRepository) Create(
@@ -35,9 +43,12 @@ func (r *TripStatusHistoryRepository) Create(
 		return fmt.Errorf("build create status history query: %w", err)
 	}
 
-	executor := database.ExecutorFromContext(ctx, r.pool)
+	queryCtx, cancel := context.WithTimeout(ctx, r.queryTimeout)
+	defer cancel()
 
-	_, err = executor.Exec(ctx, query, args...)
+	executor := database.ExecutorFromContext(queryCtx, r.pool)
+
+	_, err = executor.Exec(queryCtx, query, args...)
 	if err != nil {
 		return fmt.Errorf("insert trip status history: %w", err)
 	}

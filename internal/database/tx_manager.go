@@ -47,13 +47,14 @@ func (m *txManager) Do(
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			_ = rollback(tx)
+			_ = rollback(txCtx, tx)
 			panic(recovered)
 		}
 	}()
 
 	if err := fn(txCtx); err != nil {
-		rollbackErr := rollback(tx)
+		rollbackErr := rollback(txCtx, tx)
+
 		if rollbackErr != nil {
 			return errors.Join(
 				err,
@@ -73,14 +74,18 @@ func (m *txManager) Do(
 
 const rollbackTimeout = 5 * time.Second
 
-func rollback(tx pgx.Tx) error {
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
+func rollback(
+	parentCtx context.Context,
+	tx pgx.Tx,
+) error {
+	rollbackCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(parentCtx),
 		rollbackTimeout,
 	)
 	defer cancel()
 
-	err := tx.Rollback(ctx)
+	err := tx.Rollback(rollbackCtx)
+
 	if errors.Is(err, pgx.ErrTxClosed) {
 		return nil
 	}

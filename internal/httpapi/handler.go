@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"math"
 	"net/http"
@@ -42,15 +41,11 @@ func (h *Handler) CreateTrip(
 	r *http.Request,
 	params api.CreateTripParams,
 ) {
-	_ = params
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var body api.CreateTripJSONRequestBody
 
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 
-	var requestBody createTripRequest
-	if err := decoder.Decode(&requestBody); err != nil {
+	if err := decoder.Decode(&body); err != nil {
 		writeProblem(
 			w,
 			http.StatusBadRequest,
@@ -61,68 +56,14 @@ func (h *Handler) CreateTrip(
 		return
 	}
 
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+	if uuid.UUID(body.UserId) == uuid.Nil ||
+		uuid.UUID(body.DriverId) == uuid.Nil {
 		writeProblem(
 			w,
 			http.StatusBadRequest,
 			"invalid_request",
-			"Некорректное тело запроса",
-			"Тело должно содержать один JSON-объект.",
-		)
-		return
-	}
-
-	if requestBody.UserID == nil ||
-		requestBody.DriverID == nil ||
-		requestBody.StartPoint == nil ||
-		requestBody.EndPoint == nil ||
-		requestBody.Price == nil {
-		writeProblem(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"Отсутствуют обязательные поля",
-			"Необходимо передать user_id, driver_id, start_point, end_point и price.",
-		)
-		return
-	}
-
-	if requestBody.StartPoint.Latitude == nil ||
-		requestBody.StartPoint.Longitude == nil ||
-		requestBody.EndPoint.Latitude == nil ||
-		requestBody.EndPoint.Longitude == nil {
-		writeProblem(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"Отсутствуют координаты",
-			"Для каждой точки необходимо передать latitude и longitude.",
-		)
-		return
-	}
-
-	body := api.TripData{
-		UserId:   *requestBody.UserID,
-		DriverId: *requestBody.DriverID,
-		StartPoint: api.Coordinates{
-			Latitude:  *requestBody.StartPoint.Latitude,
-			Longitude: *requestBody.StartPoint.Longitude,
-		},
-		EndPoint: api.Coordinates{
-			Latitude:  *requestBody.EndPoint.Latitude,
-			Longitude: *requestBody.EndPoint.Longitude,
-		},
-		Price: *requestBody.Price,
-	}
-
-	if err := validateTripData(body); err != nil {
-		writeProblem(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"Некорректные данные поездки",
-			err.Error(),
+			"Некорректные идентификаторы",
+			"user_id и driver_id должны быть ненулевыми UUID.",
 		)
 		return
 	}
@@ -142,7 +83,10 @@ func (h *Handler) CreateTrip(
 		Price: body.Price,
 	}
 
-	createdTrip, err := h.tripService.Create(r.Context(), trip)
+	ctx, cancel := context.WithTimeout(r.Context(), h.queryTimeout)
+	defer cancel()
+
+	createdTrip, err := h.tripService.Create(ctx, trip)
 	if err != nil {
 		if errors.Is(err, domain.ErrDriverBusy) {
 			writeProblem(
@@ -156,6 +100,7 @@ func (h *Handler) CreateTrip(
 		}
 
 		log.Printf("create trip failed: %v", err)
+
 		writeProblem(
 			w,
 			http.StatusInternalServerError,
@@ -165,7 +110,12 @@ func (h *Handler) CreateTrip(
 		)
 		return
 	}
-	w.Header().Set("Location", "/api/v1/trips/"+createdTrip.ID.String())
+
+	w.Header().Set(
+		"Location",
+		"/api/v1/trips/"+createdTrip.ID.String(),
+	)
+
 	writeJSON(w, http.StatusCreated, toAPITrip(createdTrip))
 }
 
@@ -176,7 +126,10 @@ func (h *Handler) GetTrip(
 ) {
 	id := uuid.UUID(tripID)
 
-	trip, err := h.tripService.GetByID(r.Context(), id)
+	ctx, cancel := context.WithTimeout(r.Context(), h.queryTimeout)
+	defer cancel()
+
+	trip, err := h.tripService.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, domain.ErrTripNotFound) {
 			writeProblem(
@@ -210,7 +163,10 @@ func (h *Handler) FinishTrip(
 ) {
 	id := uuid.UUID(tripID)
 
-	trip, err := h.tripService.Finish(r.Context(), id)
+	ctx, cancel := context.WithTimeout(r.Context(), h.queryTimeout)
+	defer cancel()
+
+	trip, err := h.tripService.Finish(ctx, id)
 	if err != nil {
 		if errors.Is(err, domain.ErrTripNotFound) {
 			writeProblem(
@@ -386,6 +342,36 @@ func writeProblem(
 	if err := json.NewEncoder(w).Encode(problem); err != nil {
 		log.Printf("write problem response failed: %v", err)
 	}
+}
+
+func (h *Handler) HandleValidationError(
+	w http.ResponseWriter,
+	message string,
+	statusCode int,
+) {
+	writeProblem(
+		w,
+		statusCode,
+		"invalid_request",
+		"Некорректный запрос",
+		message,
+	)
+}
+
+func (h *Handler) HandleAPIError(
+	w http.ResponseWriter,
+	r *http.Request,
+	err error,
+) {
+	log.Printf("API request validation failed: %v", err)
+
+	writeProblem(
+		w,
+		http.StatusBadRequest,
+		"invalid_request",
+		"Некорректный запрос",
+		"Параметры запроса не соответствуют API-контракту.",
+	)
 }
 
 var _ api.ServerInterface = (*Handler)(nil)

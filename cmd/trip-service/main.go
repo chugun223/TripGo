@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os/signal"
 	"syscall"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/joho/godotenv"
+	"time"
 
 	"github.com/chugun223/TripGo/internal/config"
 	"github.com/chugun223/TripGo/internal/database"
@@ -17,6 +16,11 @@ import (
 	"github.com/chugun223/TripGo/internal/httpapi"
 	"github.com/chugun223/TripGo/internal/repository"
 	"github.com/chugun223/TripGo/internal/service"
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
+	middleware "github.com/oapi-codegen/nethttp-middleware"
 )
 
 func main() {
@@ -31,12 +35,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("database initialization failed: %v", err)
 	}
-	defer dbPool.Close()
 
 	log.Println("database connection established")
 
-	tripRepository := repository.NewTripRepository(dbPool)
-	historyRepository := repository.NewTripStatusHistoryRepository(dbPool)
+	tripRepository := repository.NewTripRepository(
+		dbPool,
+		cfg.Database.QueryTimeout,
+	)
+
+	historyRepository := repository.NewTripStatusHistoryRepository(
+		dbPool,
+		cfg.Database.QueryTimeout,
+	)
 	txManager := database.NewTxManager(dbPool)
 
 	tripService := service.NewTripService(
@@ -51,8 +61,33 @@ func main() {
 		cfg.Database.QueryTimeout,
 	)
 
+	loader := openapi3.NewLoader()
+
+	spec, err := loader.LoadFromFile(
+		"contracts/openapi/trip-service.openapi.yaml",
+	)
+	if err != nil {
+		log.Fatalf("load OpenAPI specification: %v", err)
+	}
+
+	spec.Servers = nil
+
 	router := chi.NewRouter()
-	handler := api.HandlerFromMux(apiHandler, router)
+	router.Use(maxBodySize(1 << 20))
+	router.Use(middleware.OapiRequestValidatorWithOptions(
+		spec,
+		&middleware.Options{
+			ErrorHandler: apiHandler.HandleValidationError,
+		},
+	))
+
+	handler := api.HandlerWithOptions(
+		apiHandler,
+		api.ChiServerOptions{
+			BaseRouter:       router,
+			ErrorHandlerFunc: apiHandler.HandleAPIError,
+		},
+	)
 
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,
@@ -82,13 +117,76 @@ func main() {
 
 	<-ctx.Done()
 
-	shutdownCtx, cancel := context.WithTimeout(
-		context.Background(),
+	log.Println("shutdown signal received")
+
+	if err := shutdown(
+		server,
+		dbPool,
 		cfg.ShutdownTimeout,
+	); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+		return
+	}
+
+	log.Println("server stopped gracefully")
+}
+
+func maxBodySize(limit int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func shutdown(
+	server *http.Server,
+	dbPool *pgxpool.Pool,
+	timeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		timeout,
 	)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v", err)
+	var shutdownErr error
+
+	if err := server.Shutdown(ctx); err != nil {
+		shutdownErr = errors.Join(
+			shutdownErr,
+			fmt.Errorf("shutdown HTTP server: %w", err),
+		)
+
+		if closeErr := server.Close(); closeErr != nil {
+			shutdownErr = errors.Join(
+				shutdownErr,
+				fmt.Errorf("force close HTTP server: %w", closeErr),
+			)
+		}
 	}
+
+	poolClosed := make(chan struct{})
+
+	go func() {
+		dbPool.Close()
+		close(poolClosed)
+	}()
+
+	select {
+	case <-poolClosed:
+		log.Println("database pool closed")
+
+	case <-ctx.Done():
+		shutdownErr = errors.Join(
+			shutdownErr,
+			fmt.Errorf("close database pool: %w", ctx.Err()),
+		)
+	}
+
+	return shutdownErr
 }

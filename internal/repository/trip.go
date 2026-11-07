@@ -19,11 +19,18 @@ import (
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
 type TripRepository struct {
-	pool *pgxpool.Pool
+	pool         *pgxpool.Pool
+	queryTimeout time.Duration
 }
 
-func NewTripRepository(pool *pgxpool.Pool) *TripRepository {
-	return &TripRepository{pool: pool}
+func NewTripRepository(
+	pool *pgxpool.Pool,
+	queryTimeout time.Duration,
+) *TripRepository {
+	return &TripRepository{
+		pool:         pool,
+		queryTimeout: queryTimeout,
+	}
 }
 
 func (r *TripRepository) Create(
@@ -75,9 +82,14 @@ func (r *TripRepository) Create(
 		return domain.Trip{}, fmt.Errorf("build create trip query: %w", err)
 	}
 
-	executor := database.ExecutorFromContext(ctx, r.pool)
+	queryCtx, cancel := context.WithTimeout(ctx, r.queryTimeout)
+	defer cancel()
 
-	createdTrip, err := scanTrip(executor.QueryRow(ctx, query, args...))
+	executor := database.ExecutorFromContext(queryCtx, r.pool)
+
+	createdTrip, err := scanTrip(
+		executor.QueryRow(queryCtx, query, args...),
+	)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) &&
@@ -110,9 +122,14 @@ func (r *TripRepository) GetByID(
 		return domain.Trip{}, fmt.Errorf("build get trip query: %w", err)
 	}
 
-	executor := database.ExecutorFromContext(ctx, r.pool)
+	queryCtx, cancel := context.WithTimeout(ctx, r.queryTimeout)
+	defer cancel()
 
-	trip, err := scanTrip(executor.QueryRow(ctx, query, args...))
+	executor := database.ExecutorFromContext(queryCtx, r.pool)
+
+	trip, err := scanTrip(
+		executor.QueryRow(queryCtx, query, args...),
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Trip{}, domain.ErrTripNotFound
 	}
@@ -151,9 +168,14 @@ func (r *TripRepository) Finish(
 		return domain.Trip{}, fmt.Errorf("build finish trip query: %w", err)
 	}
 
-	executor := database.ExecutorFromContext(ctx, r.pool)
+	queryCtx, cancel := context.WithTimeout(ctx, r.queryTimeout)
+	defer cancel()
 
-	trip, err := scanTrip(executor.QueryRow(ctx, query, args...))
+	executor := database.ExecutorFromContext(queryCtx, r.pool)
+
+	trip, err := scanTrip(
+		executor.QueryRow(queryCtx, query, args...),
+	)
 	if err == nil {
 		return trip, nil
 	}
@@ -162,7 +184,7 @@ func (r *TripRepository) Finish(
 		return domain.Trip{}, fmt.Errorf("finish trip: %w", err)
 	}
 
-	existingTrip, getErr := r.GetByID(ctx, id)
+	existingTrip, getErr := r.GetByID(queryCtx, id)
 	if errors.Is(getErr, domain.ErrTripNotFound) {
 		return domain.Trip{}, domain.ErrTripNotFound
 	}
