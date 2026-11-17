@@ -10,7 +10,11 @@ import (
 )
 
 func Problem(err error) (int, api.Problem) {
+	var validation *trip.ValidationError
 	switch {
+	case errors.As(err, &validation):
+		return newProblem(http.StatusBadRequest, "invalid_request", "Invalid request", validation.Error())
+
 	case errors.Is(err, trip.ErrTripNotFound):
 		return newProblem(
 			http.StatusNotFound,

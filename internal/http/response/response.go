@@ -67,9 +67,17 @@ func Trip(value domain.Trip) api.Trip {
 			Latitude:  value.EndPoint.Latitude,
 			Longitude: value.EndPoint.Longitude,
 		},
-		Price:      value.Price,
-		Status:     api.TripStatus(value.Status),
-		StartedAt:  value.StartedAt,
-		FinishedAt: value.FinishedAt,
+		Price:          value.Price,
+		Status:         api.TripStatus(value.Status),
+		StartedAt:      value.StartedAt,
+		FinishedAt:     value.FinishedAt,
+		LastPositionAt: value.LastPositionAt,
+	}
+}
+
+func Position(value domain.Position) api.TripPosition {
+	return api.TripPosition{
+		Id: value.ID, TripId: value.TripID, RecordedAt: value.RecordedAt,
+		Coordinates: api.Coordinates{Latitude: value.Coordinates.Latitude, Longitude: value.Coordinates.Longitude},
 	}
 }

@@ -76,7 +76,7 @@ func (r *TripRepository) Create(
 				start_latitude, start_longitude,
 				end_latitude, end_longitude,
 				price, status, started_at, finished_at,
-				created_at, updated_at
+				created_at, updated_at, last_position_at
 		`).
 		ToSql()
 	if err != nil {
@@ -109,7 +109,7 @@ func (r *TripRepository) GetByID(
 			"start_latitude", "start_longitude",
 			"end_latitude", "end_longitude",
 			"price", "status", "started_at", "finished_at",
-			"created_at", "updated_at",
+			"created_at", "updated_at", "last_position_at",
 		).
 		From("trips").
 		Where(sq.Eq{"id": id}).
@@ -152,7 +152,7 @@ func (r *TripRepository) Finish(
 				start_latitude, start_longitude,
 				end_latitude, end_longitude,
 				price, status, started_at, finished_at,
-				created_at, updated_at
+				created_at, updated_at, last_position_at
 		`).
 		ToSql()
 	if err != nil {
@@ -229,6 +229,7 @@ func scanTrip(row pgx.Row) (domain.Trip, error) {
 		&trip.FinishedAt,
 		&trip.CreatedAt,
 		&trip.UpdatedAt,
+		&trip.LastPositionAt,
 	)
 	if err != nil {
 		return domain.Trip{}, err
