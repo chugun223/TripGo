@@ -12,6 +12,8 @@ type Config struct {
 	Log             LogConfig
 	ShutdownTimeout time.Duration
 	Database        DatabaseConfig
+	Positions       PositionsConfig
+	Push            PushConfig
 }
 
 type HTTPConfig struct {
@@ -138,6 +140,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	positions, push, err := loadPositions()
+	if err != nil {
+		return Config{}, err
+	}
+
 	config := Config{
 		HTTP: HTTPConfig{
 			Addr:              httpAddr,
@@ -150,6 +157,8 @@ func Load() (Config, error) {
 			Level: logLevel,
 		},
 		ShutdownTimeout: shutdownTimeout,
+		Positions:       positions,
+		Push:            push,
 		Database: DatabaseConfig{
 			URL:             databaseURL,
 			MaxConns:        maxConns,

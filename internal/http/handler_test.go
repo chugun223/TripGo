@@ -29,6 +29,7 @@ func TestReadySuccess(t *testing.T) {
 		nil,
 		pinger,
 		time.Second,
+		PositionHandlers{},
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -60,6 +61,7 @@ func TestReadyDatabaseUnavailable(t *testing.T) {
 		nil,
 		pinger,
 		time.Second,
+		PositionHandlers{},
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)

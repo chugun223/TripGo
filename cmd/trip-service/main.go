@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 
@@ -19,8 +18,6 @@ import (
 	"github.com/chugun223/TripGo/internal/infra/telemetry"
 )
 
-const telemetryShutdownTimeout = 5 * time.Second
-
 func main() {
 	if err := run(); err != nil {
 		slog.Error("application failed", "error", err)
@@ -28,7 +25,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (runErr error) {
 	_ = godotenv.Load()
 
 	cfg, err := config.Load()
@@ -39,49 +36,27 @@ func run() error {
 	log := logger.New(cfg.Log.Level)
 	slog.SetDefault(log)
 
-	shutdownTracing, err := telemetry.InitTracing(
+	var app *container.Container
+	var shutdownTracing, shutdownMetrics func(context.Context) error
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		runErr = errors.Join(runErr, shutdown(shutdownCtx, app, shutdownMetrics, shutdownTracing, log))
+	}()
+
+	shutdownTracing, err = telemetry.InitTracing(
 		context.Background(),
 	)
 	if err != nil {
 		return fmt.Errorf("initialize tracing: %w", err)
 	}
 
-	shutdownMetrics, err := telemetry.InitMetrics(
+	shutdownMetrics, err = telemetry.InitMetrics(
 		context.Background(),
 	)
 	if err != nil {
 		return fmt.Errorf("initialize metrics: %w", err)
 	}
-
-	defer func() {
-		metricsCtx, cancel := context.WithTimeout(
-			context.Background(),
-			telemetryShutdownTimeout,
-		)
-		defer cancel()
-
-		if err := shutdownMetrics(metricsCtx); err != nil {
-			log.Error(
-				"metrics shutdown failed",
-				"error", err,
-			)
-		}
-	}()
-
-	defer func() {
-		telemetryCtx, cancel := context.WithTimeout(
-			context.Background(),
-			telemetryShutdownTimeout,
-		)
-		defer cancel()
-
-		if err := shutdownTracing(telemetryCtx); err != nil {
-			log.Error(
-				"telemetry shutdown failed",
-				"error", err,
-			)
-		}
-	}()
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
@@ -90,11 +65,14 @@ func run() error {
 	)
 	defer stop()
 
-	app, err := container.New(ctx, cfg)
+	app, err = container.New(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
-	defer app.Close()
+
+	if err := app.Start(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("start position workers: %w", err)
+	}
 
 	log.Info(
 		"starting HTTP server",
@@ -104,36 +82,37 @@ func run() error {
 	serverErrors := make(chan error, 1)
 
 	go func() {
-		err := app.Server.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErrors <- err
-			stop()
-		}
+		serverErrors <- app.Server.ListenAndServe()
 	}()
-
-	<-ctx.Done()
-
-	shutdownCtx, cancel := context.WithTimeout(
-		context.Background(),
-		cfg.ShutdownTimeout,
-	)
-	defer cancel()
-
-	if err := app.Server.Shutdown(shutdownCtx); err != nil {
-		log.Error(
-			"server shutdown error",
-			"error", err,
-		)
-
-		return fmt.Errorf("shutdown HTTP server: %w", err)
-	}
-
-	log.Info("HTTP server stopped")
 
 	select {
 	case err := <-serverErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		return fmt.Errorf("HTTP server failed: %w", err)
-	default:
+	case <-ctx.Done():
+		log.Info("shutdown signal received")
 		return nil
 	}
+}
+
+func shutdown(ctx context.Context, app *container.Container,
+	metrics, tracing func(context.Context) error, log *slog.Logger,
+) error {
+	var result error
+	if app != nil {
+		if err := app.Server.Shutdown(ctx); err != nil {
+			result = errors.Join(result, fmt.Errorf("shutdown HTTP server: %w", err), app.Server.Close())
+		}
+		log.Info("HTTP server stopped")
+		result = errors.Join(result, app.Shutdown(ctx))
+	}
+	if metrics != nil {
+		result = errors.Join(result, metrics(ctx))
+	}
+	if tracing != nil {
+		result = errors.Join(result, tracing(ctx))
+	}
+	return result
 }
